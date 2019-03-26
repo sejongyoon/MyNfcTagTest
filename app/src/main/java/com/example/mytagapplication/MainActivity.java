@@ -5,6 +5,7 @@ import android.nfc.NfcAdapter.ReaderCallback;
 import android.nfc.Tag;
 import android.nfc.TagLostException;
 import android.nfc.tech.MifareClassic;
+import android.nfc.tech.NfcA;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -26,6 +27,8 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
     public static final int TAG_READING = 0;
     public static final int TAG_COMPLETE = 1;
     public static final int TAG_LOST = 2;
+    public static final int TAG_COUNTING = 3;
+    public static int mCount = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,13 +46,15 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
                         mTextView.setText("Reading the TAG ...");
                         break;
                     case TAG_COMPLETE:
-                        textViewString += "TAG COMPLETE !!!\n";
+                        textViewString += "\nTAG COMPLETE !!!\n";
                         mTextView.setText(textViewString);
                         break;
                     case TAG_LOST:
-                        textViewString += "TAG LOST !!!\n";
+                        textViewString += "\nTAG LOST !!!\n";
                         mTextView.setText(textViewString);
                         break;
+                    case TAG_COUNTING:
+                        mTextView.setText(textViewString);
                     default:
                         break;
                 }
@@ -60,8 +65,9 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
     @Override
     protected void onResume() {
         Log.d(TAG, "onResume");
-        textViewString = "";
         mTextView.setText("onResume");
+        textViewString = "";
+
         super.onResume();
         mNfcAdapter.enableReaderMode(this, this, NfcAdapter.FLAG_READER_NFC_A |
                 NfcAdapter.FLAG_READER_NFC_B | NfcAdapter.FLAG_READER_NFC_V, null);
@@ -76,21 +82,53 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
         return sb.toString();
     }
 
+    public static String shortToHexBytes(short sr) {
+        byte[] bytes = new byte[] {(byte) ((sr & 0xFF00) >> 8), (byte) (sr & 0x00FF)};
+        return getHexBytes(bytes);
+    }
+
     @Override
     public void onTagDiscovered(Tag tag) {
         Log.d(TAG, "onTagDiscovered");
+        textViewString = "";
         sendMessage(TAG_READING);
 
         byte[] mId = tag.getId();
         Log.d(TAG, "TAG ID : " + getHexBytes(mId));
         String[] techList = tag.getTechList();
+
+        textViewString += "[TAG TECH LIST]\n";
         for (String tech : techList) {
+            textViewString += "    " + tech + "\n";
             Log.d(TAG, "TAG Tech : " + tech);
         }
+        textViewString += "\n";
 
         // #1 Try to read the kind of Mifare Classic Tag
-        textViewString = "";
         try {
+            textViewString += "[TAG BASIC INFORMATION]\n\n";
+            NfcA nfcA = NfcA.get(tag);
+            if (nfcA != null) {
+                nfcA.connect();
+                if (nfcA.isConnected()) {
+                    textViewString += "[NFC A]\n";
+                    textViewString += "    ID : 0x " + getHexBytes(mId) + "\n";
+                    byte[] atqa = nfcA.getAtqa();
+                    textViewString += "    ATQA : 0x " + getHexBytes(atqa) +"\n";
+                    short sak = nfcA.getSak();
+                    textViewString += "    SAK : 0x " + shortToHexBytes(sak);
+                    if (sak == (byte) 0x28 || sak == (byte) 0x38) {
+                        textViewString += " - Emulated Mifare Tag\n";
+                    } else {
+                        textViewString += "\n";
+                    }
+                    textViewString += "    MAX TRANSCEIVE : " + nfcA.getMaxTransceiveLength() + " bytes\n";
+                    textViewString += "    TIMEOUT : " + nfcA.getTimeout() + " milliseconds\n";
+                }
+                textViewString += "\n";
+                nfcA.close();
+            }
+
             MifareClassic MC = MifareClassic.get(tag);
             if (MC != null) {
                 MC.connect();
@@ -109,8 +147,7 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
                     } else {
                         tagType = "Unknown";
                     }
-                    textViewString += "Mifare " + tagType + " is connected\n"
-                            + "    ID is " + getHexBytes(mId) + "\n"
+                    textViewString += "[Mifare " + tagType + "]\n"
                             + "    All Size is " + size + " bytes\n"
                             + "    Block Size is " + size / blockCount + " bytes\n"
                             + "    Sector Count is " + sectorCount + "\n"
@@ -144,20 +181,25 @@ public class MainActivity extends AppCompatActivity implements ReaderCallback {
                                 Log.d(TAG,"BLOCK " + block + " : " + getHexBytes(readBlock));
                             }
                         } else {
+                            textViewString += "SECTOR [" + sector  +"] - NOT Authenticate\n";
                             Log.d(TAG, "SECTOR " + sector + " can't authenticate");
                         }
+                        sendMessage(TAG_COUNTING);
                     }
                 } else {
                     Log.d(TAG, "Mifare is not connected");
                 }
+                MC.close();
             }
         } catch (TagLostException e) {
             Log.d(TAG, "Tag is lost");
             sendMessage(TAG_LOST);
             e.printStackTrace();
+            return;
         } catch (IOException e) {
             Log.d(TAG, "IOException");
             e.printStackTrace();
+            return;
         }
         sendMessage(TAG_COMPLETE);
     }
